@@ -1,18 +1,10 @@
-# SUMMA — Calculadora de Liquidación
+# legalpalec
 
-Proyecto separado para React/Vite a partir de un archivo HTML único.
+Una herramienta legal para tus necesidades - legislacion ecuatoriana.
 
-## Estructura
+## Calculadora de Liquidacion
 
-```txt
-index.html
-package.json
-src/
-  App.jsx
-  main.jsx
-  styles.css
-  legacyCalculator.js
-```
+Aplicacion React/Vite para calcular liquidaciones laborales referenciales en Ecuador, con identidad visual de NOVOLEGIS.
 
 ## Ejecutar localmente
 
@@ -21,18 +13,19 @@ npm install
 npm run dev
 ```
 
-## Subir a GitHub
+## Estructura
 
-```bash
-git init
-git add .
-git commit -m "Primer commit"
-git branch -M main
-git remote add origin https://github.com/TU_USUARIO/NOMBRE_DEL_REPO.git
-git push -u origin main
+```txt
+index.html
+package.json
+public/
+src/
+  App.jsx
+  main.jsx
+  styles.css
+  legacyCalculator.js
 ```
 
-## Nota técnica
+## Nota tecnica
 
-La lógica original está conservada en `src/legacyCalculator.js`.
-La interfaz original renderiza con `document.body.innerHTML`, por eso `App.jsx` solo inicializa la calculadora.
+La logica original esta conservada en `src/legacyCalculator.js`.
