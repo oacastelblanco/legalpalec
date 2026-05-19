@@ -1,0 +1,808 @@
+
+
+// ── DATOS ──────────────────────────────────────────────────────
+var formData = {
+    region: 'costa',
+    fechaInicio: '',
+    fechaFin: '',
+    remuneracion: '',
+    decimosMensualizados: 'no',
+    diasVacaciones: '',
+    diasPendientes: '',
+    tieneDiscapacidad: 'no',
+    causalTerminacion: 'despido_intempestivo',
+    tipoTerminacionEmergente: 'anticipado_antes',
+    sueldosMensuales: {}
+};
+var resultados = null;
+var mostrarDetalle = false;
+
+var causales = [
+    { value: 'despido_intempestivo',   label: 'Despido Intempestivo' },
+    { value: 'desahucio',              label: 'Desahucio (empleado avisó que terminó)' },
+    { value: 'renuncia_voluntaria',    label: 'Renuncia Voluntaria' },
+    { value: 'visto_bueno_empleador',  label: 'Visto Bueno Art.172 (fallé yo)' },
+    { value: 'visto_bueno_trabajador', label: 'Visto Bueno Art.173 (falló la empresa)' },
+    { value: 'conclusion_contrato',    label: 'Conclusión de Contrato/Obra (terminó la obra)' },
+    { value: 'mujer_embarazada',       label: 'Despido Ineficaz Art.195 (Embarazo/Lactancia)' },
+    { value: 'dirigente_sindical',     label: 'Dirigente Sindical Art.187' },
+    { value: 'contrato_emergente',     label: 'Contrato Emergente' },
+    { value: 'tiempo_parcial_despido',    label: 'Contrato Parcial — Despido Intempestivo' },
+    { value: 'tiempo_parcial_renuncia',   label: 'Contrato Parcial — Renuncia Voluntaria' }
+];
+
+// ── FECHAS ─────────────────────────────────────────────────────
+function formatearFechaInput(input) {
+    var v = input.value.replace(/\D/g, '');
+    if (v.length >= 2) v = v.substring(0,2) + '/' + v.substring(2);
+    if (v.length >= 5) v = v.substring(0,5) + '/' + v.substring(5);
+    if (v.length > 10) v = v.substring(0,10);
+    input.value = v;
+}
+
+function convertirFechaAISO(f) {
+    if (!f || f.length !== 10) return null;
+    var p = f.split('/');
+    if (p.length !== 3) return null;
+    var d = parseInt(p[0]), m = parseInt(p[1]), a = parseInt(p[2]);
+    if (isNaN(d)||isNaN(m)||isNaN(a)) return null;
+    if (d<1||d>31||m<1||m>12||a<1900||a>2099) return null;
+    return a+'-'+('0'+m).slice(-2)+'-'+('0'+d).slice(-2);
+}
+
+function hoy() {
+    var h = new Date();
+    return ('0'+h.getDate()).slice(-2)+'/'+('0'+(h.getMonth()+1)).slice(-2)+'/'+h.getFullYear();
+}
+
+function setFechaInicio() { formData.fechaInicio = hoy(); render(); }
+function setFechaFin()    { formData.fechaFin    = hoy(); render(); }
+
+function updateData() {
+    var ids = ['region','causalTerminacion','fechaInicio','fechaFin','remuneracion','diasVacaciones','diasPendientes'];
+    ids.forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) formData[id] = el.value;
+    });
+    var radios = ['decimosMensualizados','tieneDiscapacidad','tipoTerminacionEmergente'];
+    radios.forEach(function(name) {
+        var el = document.querySelector('input[name="'+name+'"]:checked');
+        if (el) formData[name] = el.value;
+    });
+    render();
+}
+
+function limpiarNumero(val) {
+    if (val === undefined || val === null || val === '') return 0;
+    var s = String(val).replace(/,/g, '.');
+    var n = parseFloat(s);
+    return isNaN(n) ? 0 : Math.round(n * 100) / 100;
+}
+
+function toggleDetalle() { mostrarDetalle = !mostrarDetalle; render(); }
+function limpiar() {
+    formData = {region:'costa',fechaInicio:'',fechaFin:'',remuneracion:'',
+        decimosMensualizados:'no',diasVacaciones:'',diasPendientes:'',tieneDiscapacidad:'no',
+        causalTerminacion:'despido_intempestivo',tipoTerminacionEmergente:'anticipado_antes',
+        sueldosMensuales:{},mejorRemuneracion:''};
+    resultados = null;
+    render();
+}
+
+function updateSueldo(key, val) {
+    var v = limpiarNumero(val);
+    if (!isNaN(v) && v >= 0) formData.sueldosMensuales[key] = v;
+    else delete formData.sueldosMensuales[key];
+}
+
+function buildGridSueldos() {
+    if (formData.decimosMensualizados !== 'no') return '';
+    var fi_iso = convertirFechaAISO(formData.fechaInicio);
+    var ff_iso = convertirFechaAISO(formData.fechaFin);
+    if (!fi_iso || !ff_iso) return '';
+    var fi = new Date(fi_iso), ff = new Date(ff_iso);
+    if (isNaN(fi) || isNaN(ff) || ff <= fi) return '';
+
+    var anioFin = ff.getFullYear();
+    var periodoInicio = new Date(anioFin - 1, 11, 1);
+    var periodoFin    = new Date(anioFin, 10, 1);
+
+    var desde = fi > periodoInicio ? new Date(fi.getFullYear(), fi.getMonth(), 1) : periodoInicio;
+    var hasta = periodoFin;
+    if (desde > hasta) return '';
+
+    var meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio',
+                 'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+    var filas = '';
+    var keysVisibles = [];
+    var cur = new Date(desde.getFullYear(), desde.getMonth(), 1);
+
+    while (cur <= hasta) {
+        var key = cur.getFullYear() + '-' + ('0'+(cur.getMonth()+1)).slice(-2);
+        keysVisibles.push(key);
+        var label = meses[cur.getMonth()] + ' ' + cur.getFullYear();
+        var val = formData.sueldosMensuales[key] !== undefined ? (Math.round(formData.sueldosMensuales[key] * 100) / 100) : '';
+        filas +=
+            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">'+
+            '<label style="font-size:0.75rem;font-weight:600;color:#374151;width:120px;flex-shrink:0">'+label+'</label>'+
+            '<input type="number" step="0.01" min="0" placeholder="0.00" value="'+val+'" '+
+            'onchange="updateSueldo(\''+key+'\', this.value)" '+
+            'style="flex:1;min-width:100px;padding:8px 12px;border:2px solid #e9d5ff;border-radius:8px;background:white;font-size:0.875rem">'+
+            '</div>';
+        cur.setMonth(cur.getMonth() + 1);
+    }
+
+    var suma = keysVisibles.reduce(function(acc, k) {
+        return acc + (formData.sueldosMensuales[k] || 0);
+    }, 0);
+    var d13est = suma / 12;
+
+    return '<div class="bg-purple-50 border-2 border-purple-300 rounded-xl p-4 mt-3">'+
+        '<p class="text-xs font-bold text-purple-800 mb-1">📅 Ingresa lo que ganaste cada mes del período (dic '+(anioFin-1)+' → nov '+anioFin+')</p>'+
+        '<p class="text-xs text-purple-600 mb-3">Incluye sueldo base + horas extras + comisiones. Deja en $0 los meses que no trabajaste.</p>'+
+        filas+
+        '<div class="bg-white border border-purple-200 rounded-lg p-3 mt-2">'+
+        '<p class="text-xs text-gray-500">Suma ingresada: <strong>$'+suma.toFixed(2)+'</strong></p>'+
+        '<p class="text-xs text-purple-800 font-bold">Décimo 13 estimado: <strong>$'+d13est.toFixed(2)+'</strong> (÷12)</p>'+
+        '</div></div>';
+}
+
+function fmt(v) { return '$' + v.toFixed(2); }
+
+// ── AUTO CALCULAR DÍAS PENDIENTES ────────────────────────────
+function autoCalcularDiasPendientes() {
+    var elFF = document.getElementById('fechaFin');
+    if (elFF) formData.fechaFin = elFF.value;
+
+    if (!formData.fechaFin) {
+        alert('Primero ingresa la fecha de fin de trabajo (Paso 3)');
+        return;
+    }
+    var ff = new Date(convertirFechaAISO(formData.fechaFin) || '');
+    if (isNaN(ff)) {
+        alert('Fecha de fin no válida. Verifica el Paso 3.');
+        return;
+    }
+
+    // Días pendientes = día del mes en que termina
+    // Ej: termina el 10 → debe 10 días de ese mes
+    var diasPend = ff.getDate();
+
+    formData.diasPendientes = diasPend;
+    var el = document.getElementById('diasPendientes');
+    if (el) el.value = diasPend;
+    render();
+}
+
+// ── AUTO CALCULAR VACACIONES ─────────────────────────────────
+function autoCalcularVacaciones() {
+    // Lee fechas actuales
+    var elFI = document.getElementById('fechaInicio');
+    var elFF = document.getElementById('fechaFin');
+    if (elFI) formData.fechaInicio = elFI.value;
+    if (elFF) formData.fechaFin    = elFF.value;
+
+    if (!formData.fechaInicio || !formData.fechaFin) {
+        alert('Primero ingresa las fechas de trabajo (Paso 3)');
+        return;
+    }
+    var fi = new Date(convertirFechaAISO(formData.fechaInicio) || '');
+    var ff = new Date(convertirFechaAISO(formData.fechaFin)   || '');
+    if (isNaN(fi) || isNaN(ff) || ff <= fi) {
+        alert('Las fechas no son válidas. Verifica el Paso 3.');
+        return;
+    }
+
+    // Calcular años, meses, días
+    var a = ff.getFullYear() - fi.getFullYear();
+    var m = ff.getMonth()   - fi.getMonth();
+    var d = ff.getDate()    - fi.getDate();
+    if (d < 0) { m--; d += new Date(ff.getFullYear(), ff.getMonth(), 0).getDate(); }
+    if (m < 0) { a--; m += 12; }
+
+    // Días por año según antigüedad (Art.69 CT)
+    // Hasta 5 años: 15 días/año
+    // A partir del 6to año: 1 día adicional por año, máx 30 días
+    var extra = a >= 6 ? Math.min(a - 5, 15) : 0;
+    var dpA   = 15 + extra;
+
+    // Proporcional: años completos + fracción de meses/días
+    var mFrac = m + (d > 0 ? d / 30 : 0);
+    var dias  = Math.round((a * dpA + (dpA / 12) * mFrac) * 10) / 10;
+
+    // Llenar el campo y actualizar
+    formData.diasVacaciones = dias;
+    var el = document.getElementById('diasVacaciones');
+    if (el) el.value = dias;
+    render();
+
+        alert('Vacaciones calculadas: ' + dias + ' dias proporcionales.\n\nDetalle:\n- Tiempo: ' + a + ' anos, ' + m + ' meses, ' + d + ' dias\n- Dias por ano: ' + dpA + (extra > 0 ? ' (+' + extra + ' extra por antiguedad desde el 6to ano)' : '') + '\n- Calculo: proporcional a TODO el tiempo laborado\n\nSi ya tomaste algunos dias, ajusta el numero manualmente.');
+}
+
+// ── HINT VACACIONES ────────────────────────────────────────────
+function calcularHintVacaciones() {
+    if (!formData.fechaInicio || !formData.fechaFin) return '<p class="text-xs text-gray-500 mt-1">Ingresa las fechas arriba y calculamos los días que te corresponden.</p>';
+    var fi = new Date(convertirFechaAISO(formData.fechaInicio)||'');
+    var ff = new Date(convertirFechaAISO(formData.fechaFin)||'');
+    if (isNaN(fi)||isNaN(ff)||ff<=fi) return '';
+    var a=ff.getFullYear()-fi.getFullYear(), m=ff.getMonth()-fi.getMonth(), d=ff.getDate()-fi.getDate();
+    if (d<0){m--;d+=new Date(ff.getFullYear(),ff.getMonth(),0).getDate();}
+    if (m<0){a--;m+=12;}
+    var extra = a>=6 ? Math.min(a-5,15) : 0;
+    var dpA = 15+extra;
+    var ref = Math.round((a*dpA+(dpA/12)*(m+(d>0?d/30:0)))*10)/10;
+    var txt = extra>0 ? ' (+'+extra+' días extra por antigüedad)' : '';
+    return '<p class="text-xs text-blue-700 bg-blue-50 rounded p-2 mt-1">Según tus fechas te corresponden aprox. <strong>~'+ref+' dias</strong>'+txt+'. Ingresa solo los NO tomados.</p>';
+}
+
+// ── CALCULO PRINCIPAL ──────────────────────────────────────────
+function calcular() {
+    // Leer todos los campos antes de calcular (por si no se disparó onchange)
+    var ids = ['region','causalTerminacion','fechaInicio','fechaFin','remuneracion','diasVacaciones','diasPendientes'];
+    ids.forEach(function(id) { var el = document.getElementById(id); if (el) formData[id] = el.value; });
+    var radios = ['decimosMensualizados','tieneDiscapacidad','tipoTerminacionEmergente'];
+    radios.forEach(function(name) { var el = document.querySelector('input[name="'+name+'"]:checked'); if (el) formData[name] = el.value; });
+
+    if (!formData.fechaInicio||!formData.fechaFin||!formData.remuneracion) {
+        alert('Por favor completa todos los campos obligatorios'); return;
+    }
+    var fi_iso = convertirFechaAISO(formData.fechaInicio);
+    var ff_iso = convertirFechaAISO(formData.fechaFin);
+    if (!fi_iso||!ff_iso) { alert('Fechas invalidas. Usa el formato DD/MM/AAAA'); return; }
+
+    var rem = limpiarNumero(formData.remuneracion);
+    if (rem <= 0) { alert('La remuneración debe ser mayor a 0'); return; }
+
+    // ── Validación SBU (se hace DESPUÉS de validar las fechas) ──
+
+    var fi = new Date(fi_iso), ff = new Date(ff_iso);
+    if (ff < fi) { alert('La fecha de fin debe ser posterior al inicio'); return; }
+
+    // Validación SBU — ahora ff ya está definido correctamente
+    var SBU_VAL = {2020:400,2021:400,2022:425,2023:450,2024:460,2025:470,2026:482};
+    var anioFinVal = ff.getFullYear();
+    var sbuVal = SBU_VAL[anioFinVal] || 482;
+    if (rem < sbuVal) {
+        var continuar = confirm(
+            'AVISO IMPORTANTE\n\n' +
+            'La remuneración ingresada ($' + rem.toFixed(2) + ') es menor al SBU del año ' + anioFinVal + ' ($' + sbuVal + ').\n\n' +
+            'Esto puede ser válido si el trabajador tenía:\n' +
+            '• Contrato de jornada parcial / medio tiempo\n' +
+            '• Trabajo por días o discontinuo\n\n' +
+            'Si es un error, cancela y corrige el valor.\n' +
+            'Si es correcto, presiona Aceptar para continuar.'
+        );
+        if (!continuar) return;
+    }
+
+    var anioFin = ff.getFullYear();
+    var MS = 1000*60*60*24;
+    var diasTot = Math.floor((ff-fi)/MS);
+
+    var anos = ff.getFullYear()-fi.getFullYear();
+    var meses = ff.getMonth()-fi.getMonth();
+    var dias  = ff.getDate()-fi.getDate();
+    if (dias<0){meses--;dias+=new Date(ff.getFullYear(),ff.getMonth(),0).getDate();}
+    if (meses<0){anos--;meses+=12;}
+
+    // SBU historico
+    var SBU_T = {2010:240,2011:264,2012:292,2013:318,2014:340,2015:354,2016:366,
+                 2017:375,2018:386,2019:394,2020:400,2021:400,2022:425,2023:450,
+                 2024:460,2025:470,2026:482};
+    var SBU = SBU_T[anioFin] || 482;
+
+    // Validar SBU
+    if (rem < SBU) {
+        var ok = confirm('AVISO: La remuneracion ($'+rem.toFixed(2)+') es menor al SBU del ano ($'+SBU+').\n\nEsto puede ser valido si es jornada parcial o contrato por dias.\nSi es un error, cancela y corrige.\n\n¿Deseas continuar de todas formas?');
+        if (!ok) return;
+    }
+
+    // DECIMO 13
+    var d13=0, detD13='';
+    if (formData.decimosMensualizados==='si') {
+        var ini13m = new Date(ff.getFullYear(),ff.getMonth(),1);
+        var desde13 = fi>ini13m ? fi : ini13m;
+        var dias13m = Math.floor((ff-desde13)/MS)+1;
+        d13 = (rem/360)*dias13m;
+        detD13 = '($'+rem.toFixed(2)+'/360) x '+dias13m+' dias del mes en curso';
+    } else {
+        var sueldos = formData.sueldosMensuales || {};
+        var sumaSueldos = Object.values(sueldos).reduce(function(a,b){return a+b;},0);
+        if (sumaSueldos > 0) {
+            d13 = sumaSueldos / 12;
+            var nMeses = Object.keys(sueldos).length;
+            detD13 = 'Suma de '+nMeses+' mes(es) ingresados ($'+sumaSueldos.toFixed(2)+') ÷ 12 (Art.111 CT)';
+        } else {
+            var ini13 = new Date(anioFin-1,11,1);
+            var fin13 = new Date(anioFin,10,30);
+            var ic13  = fi>ini13?fi:ini13;
+            var fc13  = ff<fin13?ff:fin13;
+            if (ic13<=fc13) {
+                var d13d = Math.floor((fc13-ic13)/MS)+1;
+                d13 = (rem/360)*d13d;
+                detD13 = '($'+rem.toFixed(2)+'/360) x '+d13d+' dias (Art.111 CT) — ingresa sueldos mensuales para mayor precisión';
+            }
+            if (ff.getMonth()===11) {
+                var ini13n=new Date(anioFin,11,1);
+                var ic13n=fi>ini13n?fi:ini13n;
+                if (ic13n<=ff) {
+                    var d13n=Math.floor((ff-ic13n)/MS)+1;
+                    var m13n=(rem/360)*d13n;
+                    d13+=m13n;
+                    detD13+=(detD13?' + ':'')+d13n+' dias dic nuevo periodo ($'+m13n.toFixed(2)+')';
+                }
+            }
+        }
+    }
+
+    // DECIMO 14 — Art.113 CT
+    // Fórmula: SBU/12 x meses laborados en el período de cálculo
+    // Costa/Insular:    1 marzo → último día febrero
+    // Sierra/Oriente:   1 agosto → 31 julio
+    var d14=0, detD14='';
+    if (formData.decimosMensualizados==='si') {
+        // Mensualizado: proporcional del mes en curso
+        var ini14m = new Date(ff.getFullYear(),ff.getMonth(),1);
+        var desde14 = fi>ini14m?fi:ini14m;
+        var dias14m = Math.floor((ff-desde14)/MS)+1;
+        var meses14m = Math.round((dias14m/30)*10)/10;
+        d14 = Math.min((SBU/12)*meses14m, SBU);
+        detD14 = '($'+SBU+'/12) x '+meses14m+' meses del período en curso (Art.113 CT)';
+    } else {
+        // Período según región
+        var ini14p, fin14p;
+        if (formData.region==='costa') {
+            // 1 marzo → último día febrero
+            var anio14c = ff.getMonth()<2 ? anioFin-1 : anioFin;
+            ini14p = new Date(anio14c, 2, 1);   // 1 marzo
+            fin14p = new Date(anio14c+1, 2, 0); // último día febrero siguiente
+        } else {
+            // 1 agosto → 31 julio
+            var anio14s = ff.getMonth()<7 ? anioFin-1 : anioFin;
+            ini14p = new Date(anio14s, 7, 1);   // 1 agosto
+            fin14p = new Date(anio14s+1, 6, 31); // 31 julio siguiente
+        }
+        var ic14 = fi>ini14p ? fi : ini14p;
+        var fc14 = ff<fin14p ? ff : fin14p;
+        if (ic14<=fc14) {
+            var dias14 = Math.floor((fc14-ic14)/MS)+1;
+            var meses14 = Math.round((dias14/30)*10)/10;
+            d14 = Math.min((SBU/12)*meses14, SBU);
+            detD14 = '($'+SBU+'/12) x '+meses14+' meses — '+(formData.region==='costa'?'Costa (mar-feb)':'Sierra (ago-jul)')+' (Art.113 CT)';
+        }
+    }
+
+    // DÍAS PENDIENTES DE PAGO
+    var diasPend = parseInt(formData.diasPendientes)||0;
+    var salPend  = (rem/30)*diasPend;
+    var detSalPend = diasPend>0 ? '($'+rem.toFixed(2)+'/30) x '+diasPend+' días pendientes de pago' : '';
+    var descIESS = Math.round(salPend * 0.0945 * 100) / 100;
+    var detDescIESS = diasPend>0 ? '$'+salPend.toFixed(2)+' x 9.45% — Aporte personal IESS (Art.73 LSS)' : '';
+
+    // VACACIONES
+    var diasVac = parseInt(formData.diasVacaciones)||0;
+    var vac = (rem/30)*diasVac;
+    var detVac = '($'+rem.toFixed(2)+'/30) x '+diasVac+' dias no gozados (Art.71 CT)';
+
+    // INDEMNIZACIONES
+    var aniosInd = anos + (meses>0||dias>0?1:0);
+    function calcDespido() {
+        if (aniosInd<3)   return {monto:rem*3,det:'$'+rem.toFixed(2)+' x 3 meses (menos de 3 años - Art.188 CT)'};
+        var m2=Math.min(aniosInd,25);
+        return {monto:rem*m2,det:'$'+rem.toFixed(2)+' x '+m2+(m2===25?' (max.25)':' años')+' (Art.188 CT)'};
+    }
+
+    var indDI=0,indDes=0,indEmb=0,indSind=0,indDisc=0;
+    var detInd={};
+    var causal = formData.causalTerminacion;
+
+    if (causal==='despido_intempestivo') {
+        var dp=calcDespido(); indDI=dp.monto; detInd.despido=dp.det;
+        indDes=rem*0.25*anos; detInd.desahucio='$'+rem.toFixed(2)+' x 0.25 x '+anos+' años completos (Art.185 CT)';
+        if (formData.tieneDiscapacidad==='si'){var mr=limpiarNumero(formData.mejorRemuneracion)||rem;indDisc=mr*18;detInd.discapacidad='$'+mr.toFixed(2)+' x 18 meses — mejor remuneración (Art.56 LOD)';}
+
+    } else if (causal==='desahucio'||causal==='renuncia_voluntaria') {
+        indDes=rem*0.25*anos; detInd.desahucio='$'+rem.toFixed(2)+' x 0.25 x '+anos+' años completos (Art.185 CT)';
+
+    } else if (causal==='mujer_embarazada') {
+        indEmb=rem*12; detInd.embarazo='$'+rem.toFixed(2)+' x 12 meses (Art.195.3 CT - Ind.especial)';
+        var dp2=calcDespido(); indDI=dp2.monto; detInd.despido=dp2.det;
+        indDes=rem*0.25*anos; detInd.desahucio='$'+rem.toFixed(2)+' x 0.25 x '+anos+' años completos (Art.185 CT)';
+        if (formData.tieneDiscapacidad==='si'){var mr=limpiarNumero(formData.mejorRemuneracion)||rem;indDisc=mr*18;detInd.discapacidad='$'+mr.toFixed(2)+' x 18 meses — mejor remuneración (Art.56 LOD)';}
+
+    } else if (causal==='dirigente_sindical') {
+        indSind=rem*12; detInd.sindical='$'+rem.toFixed(2)+' x 12 meses (Art.195.3 CT - Ind.especial sindical)';
+        var dp3=calcDespido(); indDI=dp3.monto; detInd.despido=dp3.det;
+        indDes=rem*0.25*anos; detInd.desahucio='$'+rem.toFixed(2)+' x 0.25 x '+anos+' años completos (Art.185 CT)';
+        if (formData.tieneDiscapacidad==='si'){var mr=limpiarNumero(formData.mejorRemuneracion)||rem;indDisc=mr*18;detInd.discapacidad='$'+mr.toFixed(2)+' x 18 meses — mejor remuneración (Art.56 LOD)';}
+
+    } else if (causal==='visto_bueno_empleador') {
+        detInd.vb='Visto bueno al empleador (Art.172 CT) - sin indemnizacion adicional';
+
+    } else if (causal==='visto_bueno_trabajador') {
+        var dp4=calcDespido(); indDI=dp4.monto; detInd.despido=dp4.det;
+        indDes=rem*0.25*anos; detInd.desahucio='$'+rem.toFixed(2)+' x 0.25 x '+anos+' años completos (Art.185 CT)';
+        if (formData.tieneDiscapacidad==='si'){var mr=limpiarNumero(formData.mejorRemuneracion)||rem;indDisc=mr*18;detInd.discapacidad='$'+mr.toFixed(2)+' x 18 meses — mejor remuneración (Art.56 LOD)';}
+
+    } else if (causal==='conclusion_contrato') {
+        if (anos>=1){indDes=rem*0.25*anos;detInd.desahucio='$'+rem.toFixed(2)+' x 0.25 x '+anos+' años completos (Art.185 CT)';}
+
+    } else if (causal==='contrato_emergente') {
+        var te = formData.tipoTerminacionEmergente;
+        if (te==='anticipado_antes') {
+            var dp5=calcDespido(); indDI=dp5.monto; detInd.despido=dp5.det;
+            if (anos>=1){indDes=rem*0.25*anos;detInd.desahucio='$'+rem.toFixed(2)+' x 0.25 x '+anos+' años completos (Art.185 CT)';}
+            if (formData.tieneDiscapacidad==='si'){var mr=limpiarNumero(formData.mejorRemuneracion)||rem;indDisc=mr*18;detInd.discapacidad='$'+mr.toFixed(2)+' x 18 meses — mejor remuneración (Art.56 LOD)';}
+        } else if (te==='vencimiento_plazo') {
+            if (anos>=1){indDes=rem*0.25*anos;detInd.desahucio='$'+rem.toFixed(2)+' x 0.25 x '+anos+' años completos (Art.185 CT - Ley Humanitaria)';}
+        } else if (te==='contrato_indefinido') {
+            var dp6=calcDespido(); indDI=dp6.monto; detInd.despido=dp6.det;
+            if (anos>=1){indDes=rem*0.25*anos;detInd.desahucio='$'+rem.toFixed(2)+' x 0.25 x '+anos+' años completos (Art.185 CT)';}
+            if (formData.tieneDiscapacidad==='si'){var mr=limpiarNumero(formData.mejorRemuneracion)||rem;indDisc=mr*18;detInd.discapacidad='$'+mr.toFixed(2)+' x 18 meses — mejor remuneración (Art.56 LOD)';}
+        }
+    } else if (causal==='tiempo_parcial_despido') {
+        // Idéntico a Despido Intempestivo — sueldo proporcional a horas (Art.188 CT)
+        var dpPD=calcDespido(); indDI=dpPD.monto; detInd.despido=dpPD.det;
+        indDes=rem*0.25*anos; detInd.desahucio='$'+rem.toFixed(2)+' x 0.25 x '+anos+' años completos (Art.185 CT)';
+        if (formData.tieneDiscapacidad==='si'){var mr=limpiarNumero(formData.mejorRemuneracion)||rem;indDisc=mr*18;detInd.discapacidad='$'+mr.toFixed(2)+' x 18 meses — mejor remuneración (Art.56 LOD)';}
+
+    } else if (causal==='tiempo_parcial_renuncia') {
+        // Idéntico a Renuncia Voluntaria — SIN indemnización por despido (Art.185 CT)
+        indDes=rem*0.25*anos; detInd.desahucio='$'+rem.toFixed(2)+' x 0.25 x '+anos+' años completos (Art.185 CT)';
+    }
+
+    var total = d13+d14+vac+salPend+indDI+indDes+indEmb+indSind+indDisc-descIESS;
+    resultados = {d13,d14,vac,salPend,detSalPend,descIESS,detDescIESS,indDI,indDes,indEmb,indSind,indDisc,total,
+                  detD13,detD14,detVac,detInd,anos,meses,dias,diasTot,rem,SBU};
+    render();
+}
+
+// ── IMPRIMIR / DESCARGAR ──────────────────────────────────────
+function mostrarModal(paraImprimir) {
+    if (!resultados) return;
+    var r = resultados;
+    var causalLabel = causales.find(function(c){return c.value===formData.causalTerminacion;});
+    var cl = causalLabel ? causalLabel.label : '';
+    var fecha = new Date().toLocaleDateString('es-EC', {year:'numeric',month:'long',day:'numeric'});
+
+    function fila(label, monto, det) {
+        if (!monto || monto<=0) return '';
+        return '<tr><td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;font-size:12px">'+label+'</td>'+
+               '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;font-size:12px;text-align:right;font-weight:bold;color:#1e3a8a">$'+monto.toFixed(2)+'</td>'+
+               '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;font-size:10px;color:#6b7280">'+(det||'')+'</td></tr>';
+    }
+
+    var fondo1 = r.anos>=1 ? '<p style="margin:3px 0;font-size:11px;color:#1e40af">Tiene '+r.anos+' año(s) — verificar fondo de reserva en IESS.</p>' : '';
+    var jub20  = r.anos>=20 ? '<p style="margin:3px 0;font-size:11px;color:#92400e">Jubilación Patronal (Art.216 CT): requiere cálculo actuarial.</p>' : '';
+
+    var contenido =
+        '<div style="background:#1e3a8a;color:white;padding:14px 20px;border-radius:8px 8px 0 0;display:flex;justify-content:space-between;align-items:center">'+
+        '<div><div style="font-size:16px;font-weight:bold">LIQUIDACIÓN LABORAL — SUMMA</div>'+
+        '<div style="font-size:11px;opacity:0.85">Ab. Hans Robles | '+fecha+'</div></div>'+
+        '<button onclick="cerrarModal()" style="background:rgba(255,255,255,0.2);border:none;color:white;font-size:20px;cursor:pointer;padding:4px 10px;border-radius:4px">x</button>'+
+        '</div>'+
+        '<div style="padding:16px;overflow-y:auto;max-height:65vh">'+
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px;padding:10px;background:#f8fafc;border-radius:6px;font-size:11px">'+
+        '<div>Region: <strong>'+(formData.region==='costa'?'Costa/Insular':'Sierra/Oriente')+'</strong></div>'+
+        '<div>Remuneracion: <strong>$'+r.rem.toFixed(2)+'</strong></div>'+
+        '<div>Inicio: <strong>'+formData.fechaInicio+'</strong></div>'+
+        '<div>Fin: <strong>'+formData.fechaFin+'</strong></div>'+
+        '<div style="grid-column:span 2">Tiempo: <strong>'+r.anos+' anos, '+r.meses+' meses, '+r.dias+' dias</strong></div>'+
+        '<div style="grid-column:span 2">Causal: <strong>'+cl+'</strong></div>'+
+        '</div>'+
+        '<table style="width:100%;border-collapse:collapse;margin-bottom:12px">'+
+        '<thead><tr style="background:#f1f5f9"><th style="padding:6px 10px;text-align:left;font-size:11px">Rubro</th><th style="padding:6px 10px;text-align:right;font-size:11px">Valor</th><th style="padding:6px 10px;text-align:left;font-size:11px">Detalle</th></tr></thead><tbody>'+
+        fila('Decimo 13',r.d13,r.detD13)+
+        fila('Decimo 14',r.d14,r.detD14)+
+        fila('Salario Pendiente',r.salPend,r.detSalPend)+
+        fila('Vacaciones',r.vac,r.detVac)+
+        fila('Ind. Despido',r.indDI,r.detInd.despido)+
+        fila('Bonif. Desahucio',r.indDes,r.detInd.desahucio)+
+        fila('Ind. Embarazo',r.indEmb,r.detInd.embarazo)+
+        fila('Ind. Especial',r.indSind,r.detInd.sindical)+
+        fila('Ind. Discapacidad',r.indDisc,r.detInd.discapacidad)+
+        (r.descIESS>0 ? '<tr style="background:#fef2f2;color:#dc2626"><td style="padding:8px;font-weight:bold">(-) Desc. IESS 9.45%</td><td style="padding:8px;font-weight:bold;text-align:right">-$'+r.descIESS.toFixed(2)+'</td><td style="padding:8px;font-size:11px">'+r.detDescIESS+'</td></tr>' : '')+
+        '<tr style="background:#16a34a;color:white"><td colspan="2" style="padding:10px;font-size:15px;font-weight:bold">TOTAL A PAGAR: $'+r.total.toFixed(2)+'</td><td></td></tr>'+
+        '</tbody></table>'+
+        '<div style="background:#fffbeb;border:1px solid #f59e0b;border-radius:6px;padding:10px;font-size:11px;color:#78350f;margin-bottom:10px">'+
+        '<strong>Rubros adicionales:</strong> Fondo de Reserva (Art.196 CT) | Res.02-2025 CNJ'+
+        fondo1+jub20+
+        '<p style="margin-top:4px;font-style:italic">Calculo referencial. Validar con el Ab. Hans Robles.</p>'+
+        '</div>'+
+        '<div class="no-print-btn" style="text-align:center;padding:8px;background:#f0f9ff;border-radius:6px;font-size:11px;color:#1e40af">'+
+        'Para guardar como PDF: presiona Imprimir → selecciona Guardar como PDF'+
+        '</div></div>'+
+        '<div class="no-print-btn" style="padding:12px 16px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:center">'+
+        '<button onclick="window.print()" style="background:#1e3a8a;color:white;border:none;padding:10px 24px;border-radius:8px;font-size:14px;font-weight:bold;cursor:pointer">Imprimir / Guardar PDF</button>'+
+        '<button onclick="cerrarModal()" style="background:#e5e7eb;color:#374151;border:none;padding:10px 24px;border-radius:8px;font-size:14px;font-weight:bold;cursor:pointer">Cerrar</button>'+
+        '</div>';
+
+    var overlay = document.createElement('div');
+    overlay.id = 'summa-modal';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+    var box = document.createElement('div');
+    box.style.cssText = 'background:white;border-radius:8px;width:100%;max-width:750px;box-shadow:0 20px 60px rgba(0,0,0,0.3);overflow:hidden';
+    box.innerHTML = contenido;
+    overlay.appendChild(box);
+    overlay.onclick = function(e){ if(e.target===overlay) cerrarModal(); };
+    document.body.appendChild(overlay);
+    if (paraImprimir) setTimeout(function(){ window.print(); }, 400);
+}
+
+function cerrarModal() { var m = document.getElementById('summa-modal'); if(m) m.remove(); }
+function imprimirReporte() { mostrarModal(true); }
+function descargarPDF()    { mostrarModal(false); }
+
+// ── RENDER ─────────────────────────────────────────────────────
+function render() {
+    var c = formData.causalTerminacion;
+    var dec = formData.decimosMensualizados;
+    var disc = formData.tieneDiscapacidad;
+    var emg = formData.tipoTerminacionEmergente;
+
+    // Clases activas botones
+    var cl_dsi = dec==='si'  ? 'border-teal-600 bg-teal-100' : 'border-gray-200 bg-white';
+    var cl_dno = dec==='no'  ? 'border-teal-600 bg-teal-100' : 'border-gray-200 bg-white';
+    var cl_xsi = disc==='si' ? 'border-pink-600 bg-pink-100' : 'border-gray-200 bg-white';
+    var cl_xno = disc==='no' ? 'border-pink-600 bg-pink-100' : 'border-gray-200 bg-white';
+
+    // Opciones causales
+    var opsCausal = causales.map(function(ca) {
+        return '<option value="'+ca.value+'"'+(c===ca.value?' selected':'')+'>'+ca.label+'</option>';
+    }).join('');
+
+    // Warning embarazada
+    var wEmb = c==='mujer_embarazada' ?
+        '<div class="bg-pink-50 border-2 border-pink-400 rounded-lg p-3 mt-2 text-xs text-pink-800 space-y-1">'+
+        '<p class="font-bold">Antes de calcular — verifica:</p>'+
+        '<p>Protección cubre: Embarazo + Maternidad (12 semanas) + Lactancia (12 meses) = hasta 15 meses post-parto</p>'+
+        '<p>REQUISITO: La trabajadora debio notificar al empleador con certificado medico del IESS.</p>'+
+        '<p>Este calculo asume que la trabajadora opta por NO reintegrarse (Art.195.3).</p></div>' : '';
+
+    // Warning emergente
+    var wEmg = c==='contrato_emergente' ?
+        '<div class="bg-amber-50 border-2 border-amber-400 rounded-lg p-3 mt-2">'+
+        '<p class="font-bold text-amber-900 text-sm mb-2">¿Cómo terminó el contrato emergente?</p>'+
+        '<div class="space-y-2">'+
+        '<label class="flex items-start gap-2 cursor-pointer"><input type="radio" name="tipoTerminacionEmergente" value="anticipado_antes" '+(emg==='anticipado_antes'?'checked':'')+' onchange="updateData()" class="mt-1"><span class="text-sm"><strong>Me despidieron antes del año</strong><br><span class="text-xs text-gray-600">Paga: Ind. Despido + Décimos + Vacaciones</span></span></label>'+
+        '<label class="flex items-start gap-2 cursor-pointer"><input type="radio" name="tipoTerminacionEmergente" value="vencimiento_plazo" '+(emg==='vencimiento_plazo'?'checked':'')+' onchange="updateData()" class="mt-1"><span class="text-sm"><strong>Llegó al año y no renovaron</strong><br><span class="text-xs text-gray-600">Paga: Desahucio (si cumplió 1 año) + Decimos + Vacaciones</span></span></label>'+
+        '<label class="flex items-start gap-2 cursor-pointer"><input type="radio" name="tipoTerminacionEmergente" value="contrato_indefinido" '+(emg==='contrato_indefinido'?'checked':'')+' onchange="updateData()" class="mt-1"><span class="text-sm"><strong>Seguí trabajando después del año y luego me despidieron</strong><br><span class="text-xs text-gray-600">Paga: Ind. Despido + Desahucio + Décimos + Vacaciones</span></span></label>'+
+        '</div></div>' : '';
+
+    // Panel resultados
+    var panelRes = '';
+    if (resultados) {
+        var r = resultados;
+        function fila(label, monto, det, color) {
+            if (monto<=0) return '';
+            return '<div class="border-l-4 '+color+' p-4 rounded mb-2">'+
+                '<div class="flex justify-between"><span class="font-bold">'+label+'</span>'+
+                '<span class="font-bold">'+fmt(monto)+'</span></div>'+
+                (mostrarDetalle&&det?'<p class="text-xs text-gray-600 mt-1">'+det+'</p>':'')+
+                '</div>';
+        }
+        var fondo1 = r.anos>=1 ? '<p class="mt-1 text-blue-700 font-semibold text-xs">Este trabajador tiene '+r.anos+' año(s) — verificar fondo de reserva pendiente en IESS.</p>' : '';
+        var jub20  = r.anos>=20 ? '<div class="bg-orange-50 rounded p-3 border border-orange-200 text-xs mt-2"><p class="font-bold text-orange-800">Jubilacion Patronal (Art.216 CT)</p><p>Con '+r.anos+' años tiene derecho a jubilacion patronal proporcional - requiere calculo actuarial con Ab. Hans Robles.</p></div>' : '';
+
+        panelRes =
+            '<div style="display:flex;flex-direction:column;gap:16px;width:100%;min-width:0">'+
+            '<div class="bg-gradient-to-r from-green-600 to-green-700 text-white p-8 rounded-2xl shadow-xl">'+
+            '<p class="text-sm mb-2 opacity-90">TOTAL A PAGAR</p>'+
+            '<h3 class="text-5xl font-bold mb-4">'+fmt(r.total)+'</h3>'+
+            '<div class="bg-white/20 p-3 rounded-lg">'+
+            '<p class="text-sm font-semibold">Tiempo laborado:</p>'+
+            '<p class="text-lg">'+r.anos+' años, '+r.meses+' meses, '+r.dias+' dias</p>'+
+            '<p class="text-xs opacity-75">('+r.diasTot+' días totales)</p></div></div>'+
+            '<button onclick="mostrarModal(false)" class="w-full bg-blue-900 text-white py-3 rounded-lg font-bold hover:bg-blue-800">📄 Imprimir / Guardar PDF</button>'+ 
+            '<button onclick="toggleDetalle()" class="px-5 bg-gray-200 text-gray-700 py-3 rounded-lg font-bold hover:bg-gray-300">'+(mostrarDetalle?'Ocultar':'Ver')+' Detalle</button>'+
+            '</div>'+
+            '<div class="bg-white p-6 rounded-2xl shadow-xl">'+
+            '<h3 class="text-xl font-bold text-gray-800 mb-4">Desglose</h3>'+
+            fila('Décimo 13°',r.d13,r.detD13,'border-purple-500 bg-purple-50')+
+            fila('Décimo 14°',r.d14,r.detD14,'border-pink-400 bg-pink-50')+
+            fila('Salario Pendiente',r.salPend,r.detSalPend,'border-yellow-500 bg-yellow-50')+
+            fila('Vacaciones',r.vac,r.detVac,'border-green-500 bg-green-50')+
+            fila('Ind. Despido Intempestivo',r.indDI,r.detInd.despido,'border-red-500 bg-red-50')+
+            fila('Bonificación Desahucio',r.indDes,r.detInd.desahucio,'border-orange-500 bg-orange-50')+
+            fila('Ind. Embarazo/Maternidad',r.indEmb,r.detInd.embarazo,'border-pink-600 bg-pink-50')+
+            fila('Ind. Especial',r.indSind,r.detInd.sindical,'border-blue-500 bg-blue-50')+
+            fila('Ind. Discapacidad',r.indDisc,r.detInd.discapacidad,'border-indigo-500 bg-indigo-50')+
+            (r.descIESS>0 ? '<div style="border-left:4px solid #dc2626;background:#fef2f2;border-radius:8px;padding:12px;margin-bottom:8px"><div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:14px;font-weight:bold;color:#dc2626">(-) Desc. IESS 9.45%</span><span style="font-size:14px;font-weight:bold;color:#dc2626">-$'+r.descIESS.toFixed(2)+'</span></div><p style="font-size:11px;color:#dc2626;margin-top:4px">'+r.detDescIESS+'</p></div>' : '')+
+            '</div>'+
+            '<div class="bg-blue-50 border-2 border-blue-200 p-4 rounded-lg space-y-2">'+
+            '<p class="font-bold text-blue-900 text-sm">Rubros adicionales a verificar:</p>'+
+            '<div class="bg-white rounded p-3 border border-blue-100 text-xs">'+
+            '<p class="font-bold text-blue-800">Fondo de Reserva (Art. 196 CT)</p>'+
+            '<p>8.33% del salario desde el 2do ano. Si el IESS NO lo pago mensualmente, el empleador debe liquidarlo.</p>'+
+            fondo1+'</div>'+jub20+
+            '<div class="bg-amber-50 rounded p-3 border border-amber-200 text-xs">'+
+            '<p class="font-bold text-amber-800">Res.02-2025 CNJ</p>'+
+            '<p>Usar la remuneracion mas favorable al trabajador entre el ultimo mes y el mes anterior.</p></div>'+
+            '<p class="text-xs text-blue-700 font-semibold">Cálculo referencial. Validar con el Ab. Hans Robles.</p>'+
+            '</div></div>';
+    } else {
+        panelRes = '<div style="background:white;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,0.1);padding:2rem;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;min-height:300px">'+
+            '<div style="font-size:4rem">⚖️</div>'+
+            '<h3 style="font-size:1.2rem;font-weight:700;color:#374151;margin:16px 0 8px">Tu liquidación aparecerá aquí</h3>'+
+            '<p style="color:#6b7280;font-size:0.875rem;margin:0">Completa los 6 pasos y presiona Calcular</p></div>';
+    }
+
+    document.body.innerHTML =
+        '<div class="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-100 p-4">'+
+        '<div style="max-width:1280px;margin:0 auto">'+
+        '<div class="bg-white rounded-2xl shadow-2xl p-6 mb-6 border-t-4 border-blue-900" style="display:flex;justify-content:space-between;align-items:center">'+
+        '<div>'+
+        '<h1 class="text-3xl font-bold text-blue-900">Calculadora de Liquidación</h1>'+
+        '<p class="text-xl font-semibold text-blue-800">NOVOLEGIS - Soluciones legales integrales</p>'+
+        '<p class="text-gray-500 text-sm">Liquidación en minutos. Certeza en segundos..</p>'+
+        '</div>'+
+        '<div style="width:160px;flex-shrink:0"><svg viewBox="0 0 417.86 404.85" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto"><style>.a{fill:#035273}.b{fill:#4a8fa8;stroke:#4a8fa8;stroke-width:.75;stroke-miterlimit:10}</style><path class="a" d="m208.58 119.92h-36.14c0 12.04-.2 23.85.11 35.64.11 4.12 2.56 6.82 6.07 7.53 1.38.28 2.74.72 4.11 1.09-.04.44-.07.88-.11 1.33h-32.48c-.07-.35-.15-.7-.22-1.05 1.29-.41 2.56-.96 3.87-1.21 4.07-.79 6.25-3.7 6.37-8.76.15-6.17.18-12.35.18-18.53.02-16.71 0-33.41-.01-50.12-.01-10.85-.23-11.18-8.83-14.2-.58-.2-1.05-.83-2.66-2.15h33.67c.12.26.24.52.37.78-1.12.57-2.2 1.36-3.36 1.66-5.38 1.35-7.18 3.82-7.21 10.5-.05 10.17-.01 20.34-.01 30.88h35.83c0-11.59.12-23.02-.06-34.45-.08-4.84-3.36-5.88-6.46-6.85-1.23-.39-2.42-1.01-3.34-2.67h32.5c.08.43.15.86.23 1.29-1.11.46-2.2 1.04-3.34 1.35-5.4 1.45-6.85 3.15-7 10.13-.25 11.18.02 22.39-.31 33.57-.08 2.63-1.27 5.55-2.61 7.72-2.4 3.92-5.3 7.38-7.98 11.04-.39-.3-.78-.6-1.17-.89-.01-4.41-.01-8.8-.01-13.63z"/><path class="a" d="m278.06 192.55c-2.94 0-5.91-.36-8.81.07-6.14.92-10.43-1.38-14.24-7.94-6.51-11.21-14.1-21.45-20.98-32.35-2.63-4.16-5.49-5.99-9.76-4.38 0 11.1-.31 22.23.12 33.31.24 6.25 2.16 7.84 7.21 8.76.96.18 1.91.41 2.87.61-.03.41-.05.82-.08 1.22h-32.46c.22-.82.23-1.09.31-1.12 9.59-3.91 9.58-3.9 9.58-16.61 0-7.52-.18-15.04.11-22.54.09-2.36 1.06-5.03 2.29-6.88 2.7-4.05 5.83-7.67 9.39-12.24.16 3.99.26 6.71.43 10.95 6.65-1.6 13.24-1.99 19.04-4.84 10.32-5.06 12.31-22.36 4.3-32.1-.57-.7-1.16-1.37-2.05-2.4 1.46-2.01 2.88-3.96 4.26-5.86 9.03 2.91 14.52 9.97 14.9 19.01.59 14.37-4.06 20.86-21.01 28.92 6.05 9.26 12.01 18.42 18 27.55 1.7 2.59 3.61 4.98 5.15 7.7 2.82 4.99 6.44 8.34 11.52 9.08-.03.7-.06 1.39-.09 2.08z"/><path class="a" d="m249.79 92.54c-23.42 33.46-48.6 64.67-75.78 94.39 1.95-8.91 65.62-87.16 75.78-94.39z"/><path class="a" d="m404.86 253.42c-2.77 0-5.55.23-8.3-.04-8.13-.79-16.25-1.72-24.37-2.72-2.92-.36-5.82-1.07-8.73-1.61-4.42-.82-8.85-1.52-13.25-2.47-4.82-1.04-9.62-2.25-14.41-3.5-3.74-.98-7.47-2.06-11.18-3.21-3.64-1.13-7.26-2.35-10.87-3.61-2.83-.99-5.64-2.09-8.45-3.17-3.27-1.26-6.57-2.43-9.79-3.84-4.21-1.84-8.62-2.34-12.96-3.32-5.69-1.28-11.41-1.21-17.09-.42-4.23.59-8.41 1.88-12.56 3.17-2.52.78-5.01 1.92-7.35 3.32-3.6 2.15-7.16 4.47-10.57 7.07-2.59 1.97-5.03 4.3-7.33 6.78-4.2 4.52-8.13 9.38-11.35 15.05-.23.41-.49.8-.79 1.28-1.37-1.8-2.69-3.56-4.02-5.3-1.11-1.45-2.15-3.01-3.37-4.31-2.93-3.12-5.86-6.25-8.95-9.11-2.76-2.56-5.73-4.78-8.62-7.11-3.69-2.96-7.64-5.29-11.82-6.99-2.93-1.19-5.89-2.22-8.85-3.28-6.53-2.32-13.21-2.4-19.87-1.47-3.09.43-6.1 1.64-9.15 2.53-5.63 1.65-11.27 3.26-16.87 5-3.25 1.01-6.45 2.24-9.67 3.38-3.4 1.2-6.79 2.42-10.18 3.62-3.11 1.1-6.22 2.23-9.35 3.26-3.63 1.19-7.26 2.35-10.92 3.37-3.74 1.03-7.51 1.88-11.27 2.78-.98.23-1.98.31-2.95.56-7.83 1.94-15.78 2.71-23.71 3.54-7.53.79-15.07 1.43-22.61 2.12-.37.03-.74 0-1.34 0 2.45-.41 4.69-.7 6.9-1.16 5.31-1.11 10.61-2.21 15.89-3.49 4.19-1.02 8.35-2.25 12.51-3.47 3.48-1.03 6.93-2.15 10.39-3.29 3.42-1.13 6.82-2.31 10.22-3.54 2.93-1.06 5.85-2.2 8.76-3.35 2.98-1.18 5.95-2.39 8.91-3.63 2.05-.86 4.09-1.79 6.13-2.71 2.94-1.32 5.89-2.63 8.81-3.99 2.48-1.15 4.93-2.41 7.41-3.56 4.09-1.91 8.15-3.96 12.31-5.61 7.37-2.94 14.94-4.6 22.69-5.04 1.79-.1 3.58-.51 5.37-.47 6.47.12 12.9.88 19.21 2.59 3.87 1.05 7.68 2.54 11.46 4.06 2.44.98 4.85 2.2 7.15 3.64 3.34 2.09 6.68 4.26 9.82 6.78 2.92 2.34 5.59 5.14 8.33 7.81.55.53.9.54 1.45.13 3.06-2.27 6.14-4.5 9.21-6.74 3.26-2.38 6.53-4.74 9.78-7.13 2.2-1.63 4.31-3.48 6.58-4.93 5.27-3.38 10.99-4.78 16.83-5.8 3.73-.65 7.42-.65 11.14-.75 4.93-.13 9.75 1.04 14.59 1.86 2.78.47 5.55 1.07 8.28 1.86 3.51 1.02 6.99 2.24 10.45 3.5 2.5.91 4.97 1.96 7.42 3.05 2.91 1.29 5.79 2.7 8.69 4.05 1.99.93 3.98 1.87 5.98 2.77 3.7 1.66 7.39 3.34 11.11 4.92 2.16.92 4.38 1.65 6.58 2.45 3.31 1.22 6.62 2.47 9.95 3.65 3.07 1.09 6.15 2.15 9.24 3.14 3.88 1.24 7.77 2.46 11.68 3.58 4.3 1.23 8.61 2.47 12.94 3.48 5.68 1.32 11.4 2.42 17.1 3.64.56.12 1.1.42 1.65.63-.05-.11-.05-.2-.05-.28z"/><path class="b" d="m56.62 300.85c11.44-.8 22.87-1.64 34.31-2.37 11.65-.74 23.3-1.47 34.96-2.02 10.71-.51 21.43-.83 32.15-1.16 8.35-.26 16.7-.47 25.06-.59 15.4-.23 30.8-.41 46.2-.53 6.47-.05 12.94-.01 19.41.19 14.03.43 28.05.95 42.08 1.49 8.5.33 16.99.77 25.49 1.2 4.62.23 9.23.48 13.84.85 9.43.77 18.85 1.63 28.27 2.46 1.84.16 3.68.38 5.52.63h-307.3c0-.04.01-.09.01-.15z"/><path class="b" d="m360.08 261.59c-1.77-.57-3.53-1.19-5.31-1.69-2.12-.59-4.27-1.05-6.4-1.6-3.42-.89-6.84-1.85-10.27-2.68-2.93-.72-5.89-1.29-8.83-1.95-4.09-.93-8.17-1.9-12.25-2.82-1.63-.37-3.3-.54-4.92-.95-7.35-1.84-14.8-2.79-22.27-3.33-4.92-.36-9.87-.74-14.79-.48-5.1.27-10.18 1.26-15.25 2.01-1.65.24-3.29.64-4.89 1.15-3.68 1.16-7.35 2.37-10.99 3.7-2.04.75-4.06 1.66-6.02 2.69-3.75 1.98-7.46 4.09-11.19 6.15-.29.16-.58.31-.95.29.74-.85 1.43-1.8 2.24-2.54 1.98-1.82 3.98-3.6 6.02-5.32 3.57-3 7.34-5.56 11.35-7.54 2.42-1.2 4.82-2.52 7.31-3.44 3.41-1.26 6.88-2.28 10.35-3.27 10.09-2.89 20.25-2.36 30.39-.64 4 .68 7.94 1.95 11.87 3.09 3.55 1.03 7.07 2.23 10.59 3.38 3.63 1.18 7.25 2.39 10.87 3.6 3.34 1.12 6.69 2.24 10.02 3.38 3.26 1.12 6.52 2.27 9.78 3.42s6.52 2.28 9.77 3.48c1.29.48 2.55 1.11 3.83 1.67l-.06.24z"/><path class="b" d="m68.65 260.47c3.54-1.2 7.09-2.39 10.63-3.61 3.01-1.04 6.02-2.13 9.03-3.18 3.22-1.13 6.44-2.27 9.66-3.36 3.66-1.24 7.33-2.44 10.99-3.64 3.45-1.13 6.9-2.28 10.36-3.35 3.93-1.22 7.87-2.35 11.8-3.55 8.29-2.53 16.72-2.93 25.18-2.25 3.86.31 7.72.9 11.53 1.77 3.21.73 6.36 1.92 9.48 3.15 2.45.96 4.87 2.11 7.19 3.49 3.17 1.89 6.33 3.88 9.32 6.18 2.96 2.27 5.71 4.95 8.52 7.52.54.49.92 1.27 1.42 1.98-1.58-.96-3.1-2.01-4.7-2.83-3.43-1.77-6.87-3.53-10.37-5.07-3.12-1.38-6.34-2.37-9.48-3.69-4.5-1.9-9.19-2.5-13.84-3.5-9.29-2-18.62-1.72-27.93-.76-7.67.79-15.3 2.26-22.93 3.65-5.39.98-10.75 2.3-16.1 3.55-4.27.99-8.52 2.09-12.78 3.18-4.28 1.1-8.57 2.23-12.84 3.4-1.38.38-2.73.94-4.1 1.41 0-.16-.02-.32-.04-.49z"/><path class="a" d="m196.17 274.07c-1.75-.95-3.34-1.87-4.96-2.67-2.8-1.38-5.59-2.82-8.45-3.99-3.14-1.28-6.34-2.34-9.53-3.38-9.6-3.1-19.36-2.98-29.15-2.1-3.68.33-7.36.81-11.01 1.48-5.25.96-10.48 2.1-15.7 3.28-4.99 1.13-9.97 2.35-14.94 3.63-3.63.94-7.24 2.03-10.91 2.78 1.88-.62 3.76-1.23 5.63-1.88 3.68-1.27 7.36-2.57 11.04-3.86 2.47-.87 4.94-1.77 7.42-2.59 4.45-1.47 8.9-2.95 13.36-4.32 4.18-1.28 8.4-2.34 12.57-3.64 5.18-1.62 10.44-1.73 15.71-1.53 2.83.11 5.7.38 8.47 1.05 3.61.87 7.22 1.92 10.68 3.4 4.09 1.75 8.08 3.97 11.73 6.91 2.49 2 4.83 4.28 7.23 6.45.29.24.49.59.81.98z"/><path class="a" d="m337.75 273.94c-.48.09-.65.18-.8.14-3.7-.99-7.4-2.05-11.11-2.98-5.12-1.28-10.25-2.54-15.4-3.66-5.8-1.26-11.65-2.18-17.43-3.57-6.94-1.67-13.93-1.69-20.93-1.55-3.53.07-7.09.44-10.58 1.12-3.59.69-7.15 1.77-10.66 2.96-3.05 1.03-6.05 2.33-8.99 3.76-2.45 1.19-4.79 2.76-7.18 4.15-.33.19-.67.35-1 .53-.08-.11-.17-.22-.25-.33.48-.5.94-1.05 1.46-1.49 2.14-1.85 4.27-3.72 6.46-5.49 3.59-2.9 7.51-4.93 11.51-6.81 4.49-2.11 9.16-2.94 13.84-3.97 3.61-.8 7.2-.7 10.8-.69 4.59.01 9.06 1.34 13.56 2.25 1.71.34 3.4.84 5.08 1.37 3.89 1.22 7.76 2.48 11.64 3.76 2.66.88 5.31 1.82 7.96 2.73 4.05 1.38 8.1 2.73 12.14 4.13 2.94 1.02 5.87 2.1 8.8 3.15.26.09.51.23 1.08.49z"/><path class="a" d="m318.65 286.66c-2.93-.83-5.86-1.72-8.8-2.49-2.35-.61-4.72-1.08-7.08-1.61-3.7-.84-7.38-1.77-11.09-2.49-8.56-1.66-17.18-2.5-25.84-1.53-3.19.36-6.38 1.03-9.49 1.96-3.07.91-6.07 2.22-9.03 3.56-2.09.94-4.07 2.23-6.21 3.13 1.17-1.14 2.24-2.49 3.52-3.39 2.91-2.05 5.89-3.93 8.89-5.78 3.64-2.25 7.63-2.92 11.57-3.91 4.52-1.14 9.05-1.12 13.54-.38 4.59.76 9.12 2.14 13.64 3.43 3.33.95 6.61 2.17 9.91 3.29 3.65 1.23 7.31 2.43 10.94 3.72 1.86.66 3.69 1.49 5.53 2.24v.25z"/><path class="a" d="m188.09 286.53c-1.11-.57-2.21-1.18-3.33-1.71-2.54-1.2-5.1-2.34-7.63-3.55-4.77-2.28-9.77-3.15-14.81-3.58-3.67-.31-7.37-.65-11.03-.39-4.29.3-8.56 1.22-12.83 1.92-2.27.37-4.54.76-6.79 1.28-5.03 1.15-10.06 2.36-15.07 3.61-1.98.49-3.93 1.15-5.9 1.73-.24.07-.48.08-.77-.12 4.23-1.44 8.45-2.89 12.68-4.32 3.66-1.23 7.32-2.45 10.98-3.63 3.59-1.16 7.22-2.19 10.79-3.43 4.86-1.69 9.82-1.93 14.81-1.72 2.39.1 4.82.3 7.15.94 3.16.87 6.3 1.98 9.32 3.4 3.61 1.71 6.93 4.23 10.15 6.89.86.71 1.58 1.69 2.36 2.54-.03.03-.06.08-.08.14z"/><path class="a" d="m234.1 287.32c-13.01-6.51-25.94-5.18-38.88.41 4.76-4.51 9.97-7.76 15.94-8.81 8.65-1.53 16.21 1.65 22.94 8.4z"/><text style="font-family:MyriadPro-Regular,Myriad Pro;font-size:37.3px;fill:#035273" transform="translate(72.309 336.26)">Abg.  Hans Robles </text></svg></div>'+
+        '</div>'+
+
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;min-width:0">'+
+        '<div class="bg-white rounded-2xl shadow-xl p-6">'+
+        '<h2 class="text-2xl font-bold text-gray-800 mb-1">Ingresa tus datos</h2>'+
+        '<p class="text-sm text-gray-500 mb-5">Completa los 6 pasos y obtén tu liquidación al instante</p>'+
+        '<div class="space-y-4">'+
+
+        // PASO 1
+        '<div class="border-2 border-blue-100 rounded-xl p-4 bg-blue-50">'+
+        '<div class="flex items-center gap-2 mb-2"><span class="bg-blue-900 text-white text-xs font-bold px-2 py-1 rounded-full">PASO 1</span><span class="font-bold text-gray-800">Dónde trabajabas?</span></div>'+
+        '<select id="region" onchange="updateData()" class="w-full px-4 py-3 border-2 border-blue-200 rounded-lg bg-white">'+
+        '<option value="costa"'+(formData.region==='costa'?' selected':'')+'>Costa o Galapagos</option>'+
+        '<option value="sierra"'+(formData.region==='sierra'?' selected':'')+'>Sierra o Amazonia</option>'+
+        '</select><p class="text-xs text-blue-700 mt-1">Afecta las fechas del Décimo Cuarto según tu región.</p></div>'+
+
+        // PASO 2
+        '<div class="border-2 border-purple-100 rounded-xl p-4 bg-purple-50">'+
+        '<div class="flex items-center gap-2 mb-2"><span class="bg-purple-700 text-white text-xs font-bold px-2 py-1 rounded-full">PASO 2</span><span class="font-bold text-gray-800">Por qué terminó tu trabajo?</span></div>'+
+        '<select id="causalTerminacion" onchange="updateData()" class="w-full px-4 py-3 border-2 border-purple-200 rounded-lg bg-white">'+opsCausal+'</select>'+
+        '<p class="text-xs text-purple-700 mt-1">Elige la opción que mejor describe lo que pasó.</p>'+
+        wEmb+wEmg+'</div>'+
+
+        // PASO 3
+        '<div class="border-2 border-green-100 rounded-xl p-4 bg-green-50">'+
+        '<div class="flex items-center gap-2 mb-2"><span class="bg-green-700 text-white text-xs font-bold px-2 py-1 rounded-full">PASO 3</span><span class="font-bold text-gray-800">Cuándo trabajaste?</span></div>'+
+        '<div class="grid grid-cols-2 gap-3">'+
+        '<div><label class="block text-xs font-bold mb-1">Primer día de trabajo</label>'+
+        '<input type="text" id="fechaInicio" value="'+formData.fechaInicio+'" oninput="formatearFechaInput(this)" onchange="updateData()" placeholder="01/01/2020" maxlength="10" class="w-full px-3 py-3 border-2 border-green-200 rounded-lg font-mono bg-white">'+
+        '<button onclick="setFechaInicio()" type="button" class="w-full mt-1 bg-green-100 hover:bg-green-200 text-green-800 text-xs py-2 rounded-lg">Hoy</button></div>'+
+        '<div><label class="block text-xs font-bold mb-1">Último día de trabajo</label>'+
+        '<input type="text" id="fechaFin" value="'+formData.fechaFin+'" oninput="formatearFechaInput(this)" onchange="updateData()" placeholder="31/12/2025" maxlength="10" class="w-full px-3 py-3 border-2 border-green-200 rounded-lg font-mono bg-white">'+
+        '<button onclick="setFechaFin()" type="button" class="w-full mt-1 bg-green-100 hover:bg-green-200 text-green-800 text-xs py-2 rounded-lg">Hoy</button></div>'+
+        '</div><p class="text-xs text-green-800 bg-white border border-green-200 rounded p-2 mt-2">Formato: 15/03/2022 — día/mes/año con 4 dígitos</p></div>'+
+
+        // PASO 4
+        '<div class="border-2 border-orange-100 rounded-xl p-4 bg-orange-50">'+
+        '<div class="flex items-center gap-2 mb-2"><span class="bg-orange-600 text-white text-xs font-bold px-2 py-1 rounded-full">PASO 4</span><span class="font-bold text-gray-800">Cuánto ganabas al mes?</span></div>'+
+        '<input type="number" id="remuneracion" value="'+formData.remuneracion+'" onchange="updateData()" placeholder="482.00" step="0.01" min="0" class="w-full px-4 py-3 border-2 border-orange-200 rounded-lg bg-white text-lg font-bold">'+
+        '<div class="bg-white border border-orange-200 rounded p-2 mt-2 text-xs text-orange-800">'+
+        '<p>Ingresa tu sueldo mensual completo: base + horas extras + comisiones.</p>'+
+        '<p>Ejemplo: Sueldo $500 + horas extras $50 cada mes = escribe 550</p></div></div>'+
+
+        // PASO 5
+        '<div class="border-2 border-teal-100 rounded-xl p-4 bg-teal-50">'+
+        '<div class="flex items-center gap-2 mb-2"><span class="bg-teal-700 text-white text-xs font-bold px-2 py-1 rounded-full">PASO 5</span><span class="font-bold text-gray-800">Cómo te pagaban los decimos?</span></div>'+
+        '<div class="flex gap-3 mb-2">'+
+        '<label class="flex-1 cursor-pointer"><input type="radio" name="decimosMensualizados" value="si" '+(dec==='si'?'checked':'')+' onchange="updateData()" class="sr-only">'+
+        '<div class="border-2 '+cl_dsi+' rounded-lg p-3 text-center text-sm font-bold text-gray-700">Cada mes<br><span class="text-xs font-normal text-gray-500">(en el sueldo mensual)</span></div></label>'+
+        '<label class="flex-1 cursor-pointer"><input type="radio" name="decimosMensualizados" value="no" '+(dec==='no'?'checked':'')+' onchange="updateData()" class="sr-only">'+
+        '<div class="border-2 '+cl_dno+' rounded-lg p-3 text-center text-sm font-bold text-gray-700">Una vez al año<br><span class="text-xs font-normal text-gray-500">(pago anual)</span></div></label>'+
+        '</div>'+
+        '<div class="bg-white border border-teal-200 rounded p-2 text-xs text-teal-800">'+
+        '<p><strong>No sabes cuál?</strong> Mira tu rol de pagos mensual:</p>'+
+        '<p>Si ves "Décimo Tercero" o "Décimo Cuarto" en cada mes → Cada mes</p>'+
+        '<p>Si te pagaban en marzo/agosto por separado → Una vez al ano</p>'+
+        '<p>Si tienes dudas → la mayoría usa <strong>Una vez al ano</strong></p></div>'+
+        buildGridSueldos()+
+        '</div>'+
+
+        // PASO 6
+        '<div class="border-2 border-pink-100 rounded-xl p-4 bg-pink-50">'+
+        '<div class="flex items-center gap-2 mb-2"><span class="bg-pink-600 text-white text-xs font-bold px-2 py-1 rounded-full">PASO 6</span><span class="font-bold text-gray-800">Últimas preguntas</span></div>'+
+        '<div class="space-y-3">'+
+        '<div><label class="block text-xs font-bold mb-1">💵 ¿Cuántos días de sueldo te deben?</label>'+
+        '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+        '<input type="number" id="diasPendientes" value="'+formData.diasPendientes+'" onchange="updateData()" placeholder="0" min="0" class="flex-1 px-4 py-2 border-2 border-pink-200 rounded-lg bg-white" style="min-width:80px">'+
+        '<button onclick="autoCalcularDiasPendientes()" type="button" class="bg-pink-600 hover:bg-pink-700 text-white px-3 py-2 rounded-lg text-xs font-bold">📅 Auto-calcular</button>'+
+        '</div>'+
+        '<p class="text-xs text-pink-700 mt-1">💡 Son los días del mes actual que trabajaste y aún no te han pagado. Ej: si saliste el día 10, escribe 10.</p>'+
+        '</div>'+
+        '<div><label class="block text-xs font-bold mb-1">¿Cuántos días de vacaciones no tomaste?</label>'+
+        '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+        '<input type="number" id="diasVacaciones" value="'+formData.diasVacaciones+'" onchange="updateData()" placeholder="0" min="0" class="flex-1 px-4 py-2 border-2 border-pink-200 rounded-lg bg-white" style="min-width:80px">'+
+        '<button onclick="autoCalcularVacaciones()" type="button" class="bg-pink-600 hover:bg-pink-700 text-white px-3 py-2 rounded-lg text-xs font-bold">📅 Auto-calcular</button>'+
+        '</div>'+
+        calcularHintVacaciones()+'</div>'+
+        '<div><label class="block text-xs font-bold mb-1">Tienes alguna discapacidad o eres trabajador(a) sustituto(a)?</label>'+
+        '<div class="flex gap-3">'+
+        '<label class="flex-1 cursor-pointer"><input type="radio" name="tieneDiscapacidad" value="si" '+(disc==='si'?'checked':'')+' onchange="updateData()" class="sr-only">'+
+        '<div class="border-2 '+cl_xsi+' rounded-lg p-2 text-center text-sm font-bold text-gray-700">Sí tengo</div></label>'+
+        '<label class="flex-1 cursor-pointer"><input type="radio" name="tieneDiscapacidad" value="no" '+(disc==='no'?'checked':'')+' onchange="updateData()" class="sr-only">'+
+        '<div class="border-2 '+cl_xno+' rounded-lg p-2 text-center text-sm font-bold text-gray-700">No tengo</div></label>'+
+        '</div>'+
+        (disc==='si' ?
+        '<div class="mt-3 bg-red-50 border-2 border-red-200 rounded-xl p-4">'+
+        '<label class="block text-xs font-bold text-gray-800 mb-1">Mejor Remuneración percibida durante la relación laboral ($)</label>'+
+        '<input type="number" step="0.01" min="0" placeholder="0.00"'+
+        ' value="'+(formData.mejorRemuneracion||'')+'"'+
+        ' onchange="formData.mejorRemuneracion=limpiarNumero(this.value)"'+
+        ' class="w-full px-3 py-2 border-2 border-red-300 rounded-lg bg-white text-sm mb-2">'+
+        '<p class="text-xs text-red-600 font-semibold text-justify leading-relaxed">'+
+        'LEY ORGÁNICA DE LAS PERSONAS CON DISCAPACIDAD: Art. 56.- '+
+        '“…En el caso de despido injustificado de una persona con discapacidad o de quien tenga a su cargo la manutención de la persona con discapacidad, deberá ser indemnizada con un valor equivalente a dieciocho meses de la mejor remuneración…”'+
+        '</p></div>'
+        : '')+
+        '</div></div>'+
+
+        // BOTONES
+        '<div class="flex gap-3 pt-2">'+
+        '<button onclick="calcular()" class="flex-1 bg-blue-900 text-white py-4 rounded-lg font-bold hover:bg-blue-800 text-lg">Calcular Liquidación</button>'+
+        '<button onclick="limpiar()" class="px-6 bg-gray-200 text-gray-700 py-4 rounded-lg font-bold hover:bg-gray-300">Limpiar</button>'+
+        '</div></div></div></div>'+
+
+        '<div style="display:flex;flex-direction:column;gap:16px">'+panelRes+
+        '<div style="background:#1e3a8a;color:white;text-align:center;padding:20px;border-radius:16px">'+
+        '<p style="font-weight:bold;font-size:15px;margin:0">© 2025 Ab. Hans Robles — Calculadora de Liquidaciónes</p>'+
+        '<p style="font-size:12px;opacity:0.8;margin-top:4px">Código del Trabajo de la República del Ecuador</p>'+
+        '</div></div>'+
+        '</div>'+
+        '</div>'+
+        '</div>';
+}
+
+/**
+ * Inicializa la calculadora heredada dentro de Vite/React.
+ * Nota: este código mantiene la lógica original y renderiza la interfaz con document.body.innerHTML.
+ */
+export function initSummaCalculator() {
+  window.formatearFechaInput = formatearFechaInput;
+  window.convertirFechaAISO = convertirFechaAISO;
+  window.hoy = hoy;
+  window.setFechaInicio = setFechaInicio;
+  window.setFechaFin = setFechaFin;
+  window.updateData = updateData;
+  window.limpiarNumero = limpiarNumero;
+  window.toggleDetalle = toggleDetalle;
+  window.limpiar = limpiar;
+  window.updateSueldo = updateSueldo;
+  window.buildGridSueldos = buildGridSueldos;
+  window.fmt = fmt;
+  window.autoCalcularDiasPendientes = autoCalcularDiasPendientes;
+  window.autoCalcularVacaciones = autoCalcularVacaciones;
+  window.calcularHintVacaciones = calcularHintVacaciones;
+  window.calcular = calcular;
+  window.mostrarModal = mostrarModal;
+  window.cerrarModal = cerrarModal;
+  window.imprimirReporte = imprimirReporte;
+  window.descargarPDF = descargarPDF;
+  window.render = render;
+
+  document.addEventListener('wheel', function(e) {
+        if (document.activeElement && document.activeElement.type === 'number') {
+            document.activeElement.blur();
+        }
+    }, { passive: false });
+    var params = new URLSearchParams(window.location.search);
+    var urlCode = params.get('code');
+    var urlExpiry = params.get('expiry');
+    if (urlCode && urlExpiry) {
+        localStorage.setItem('summaAccess', JSON.stringify({code: urlCode, expiry: parseInt(urlExpiry)}));
+        window.history.replaceState({}, document.title, window.location.pathname);
+    }
+    var accessData = JSON.parse(localStorage.getItem('summaAccess') || 'null');
+    var now = new Date().getTime();
+    var isLocalPreview = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    if (isLocalPreview && (!accessData || now >= accessData.expiry)) {
+        accessData = { code: 'local-preview', expiry: now + (30 * 24 * 60 * 60 * 1000) };
+        localStorage.setItem('summaAccess', JSON.stringify(accessData));
+    }
+    if (!accessData) { window.location.href = 'https://calculadorasolucionesrobles.netlify.app/'; return; }
+    if (now >= accessData.expiry) {
+        localStorage.removeItem('summaAccess');
+        alert('Tu acceso de 30 días ha expirado. Por favor renueva tu acceso.');
+        window.location.href = 'https://calculadorasolucionesrobles.netlify.app/';
+        return;
+    }
+    render();
+}
